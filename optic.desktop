@@ -1,0 +1,6 @@
+[Desktop Entry]
+Name=Optic
+Comment=Optic DE, a small desktop in the MinUI look
+Exec=/opt/optic-de/bin/optic-session
+Type=Application
+DesktopNames=Optic

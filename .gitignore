@@ -1,0 +1,6 @@
+/optic-de
+/optic-term
+/optic-files
+/optic-settings
+/libsysvshm.so
+*.o

@@ -1,0 +1,49 @@
+#!/bin/sh
+# Starts Optic DE on the current X display: from a login manager ("Optic" session), from startx
+# (~/.xinitrc: exec optic-session), or from Optic Suite on Android (OPTIC_ANDROID=1, under proot).
+[ -n "$XDG_RUNTIME_DIR" ] || { export XDG_RUNTIME_DIR=/tmp/runtime-$(id -u); mkdir -p -m 700 "$XDG_RUNTIME_DIR"; }
+export XDG_SESSION_TYPE=x11 XDG_CURRENT_DESKTOP=Optic
+export ADW_DEBUG_COLOR_SCHEME=prefer-dark
+
+if [ "$OPTIC_ANDROID" = 1 ]; then
+  # --- Android (proot) only -------------------------------------------------------------------
+  export NO_AT_BRIDGE=1 GTK_A11Y=none
+  # Faster GTK apps under proot: no virtual-filesystem daemons, no accessibility bus.
+  export GIO_USE_VFS=local GVFS_DISABLE_FUSE=1
+  # GNOME's file indexer (LocalSearch / Tracker): heavy, and pointless there. Keep it from starting.
+  for f in /usr/share/dbus-1/services/org.freedesktop.LocalSearch3*.service /usr/share/dbus-1/services/org.freedesktop.Tracker3.Miner*.service \
+           /etc/xdg/autostart/localsearch-3.desktop /etc/xdg/autostart/tracker-miner-fs-3.desktop; do
+    [ -e "$f" ] && rm -f "$f"
+  done
+  # D-Bus wants a machine id; the container's Debian ships "uninitialized".
+  grep -qx '[0-9a-f]\{32\}' /etc/machine-id 2>/dev/null || dbus-uuidgen > /etc/machine-id
+  # Firefox's sandbox needs kernel features proot can't give it; no GPU either.
+  export MOZ_CRASHREPORTER_DISABLE=1 MOZ_FAKE_NO_SANDBOX=1 MOZ_DISABLE_CONTENT_SANDBOX=1 MOZ_DISABLE_GMP_SANDBOX=1 MOZ_DISABLE_RDD_SANDBOX=1 MOZ_DISABLE_SOCKET_PROCESS_SANDBOX=1
+  export LIBGL_ALWAYS_SOFTWARE=1
+  # The phone's native resolution: everything twice the size.
+  export OPTIC_SCALE=${OPTIC_SCALE:-2}
+  THEME=always
+else
+  # A PC: normal size unless OPTIC_SCALE says otherwise (2 for a HiDPI screen).
+  export OPTIC_SCALE=${OPTIC_SCALE:-1}
+  THEME=${OPTIC_THEME:-keep}
+fi
+
+# One Optic theme for GTK 3 (Firefox) and GTK 4. On a PC an existing GTK setup is left alone
+# (OPTIC_THEME=always to use Optic's anyway).
+for v in 3.0 4.0; do
+  mkdir -p "$HOME/.config/gtk-$v"
+  if [ "$THEME" = always ] || [ ! -e "$HOME/.config/gtk-$v/settings.ini" ]; then cp /opt/optic-de/share/gtk-settings.ini "$HOME/.config/gtk-$v/settings.ini"; fi
+done
+if [ "$THEME" = always ] || [ ! -e "$HOME/.config/gtk-3.0/gtk.css" ]; then cp /opt/optic-de/share/gtk3.css "$HOME/.config/gtk-3.0/gtk.css"; fi
+if [ "$THEME" = always ] || [ ! -e "$HOME/.config/gtk-4.0/gtk.css" ]; then cp /opt/optic-de/share/gtk4.css "$HOME/.config/gtk-4.0/gtk.css"; fi
+
+export GDK_SCALE=$OPTIC_SCALE GDK_DPI_SCALE=1 QT_SCALE_FACTOR=$OPTIC_SCALE
+export XCURSOR_THEME=Adwaita XCURSOR_SIZE=$((24 * OPTIC_SCALE))
+xrdb -nocpp -merge /opt/optic-de/share/xterm.res 2>/dev/null
+printf 'XTerm*faceSize: %s\nXTerm*internalBorder: %s\nXcursor.size: %s\nXcursor.theme: Adwaita\n' \
+  $((10 * OPTIC_SCALE)) $((14 * OPTIC_SCALE)) $((24 * OPTIC_SCALE)) | xrdb -nocpp -merge 2>/dev/null
+
+# A session bus, unless the login manager already started one.
+if [ -z "$DBUS_SESSION_BUS_ADDRESS" ]; then exec dbus-launch --exit-with-session /opt/optic-de/bin/optic-de; fi
+exec /opt/optic-de/bin/optic-de

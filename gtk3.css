@@ -1,0 +1,14 @@
+/* Optic theme for GTK 3 apps (Firefox's dialogs and menus follow it). */
+@define-color theme_bg_color #000000;
+@define-color theme_fg_color #e8e8e8;
+@define-color theme_base_color #000000;
+@define-color theme_text_color #e8e8e8;
+@define-color theme_selected_bg_color #ffffff;
+@define-color theme_selected_fg_color #000000;
+* { font-family: "BPreplay"; }
+button, entry { border-radius: 999px; }
+
+/* Apps that draw their own title bar (Firefox): no GTK border or shadow around the window; Optic
+   DE rounds its corners instead. */
+decoration, window.solid-csd decoration { border: none; box-shadow: none; margin: 0; }
+window.solid-csd, window.csd { border: none; padding: 0; margin: 0; box-shadow: none; }

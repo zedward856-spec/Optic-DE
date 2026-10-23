@@ -1,0 +1,6 @@
+* text=auto eol=lf
+*.png binary
+*.otf binary
+*.a8 binary
+optic-session text eol=lf
+optic-firefox text eol=lf

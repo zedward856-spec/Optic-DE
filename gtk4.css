@@ -1,0 +1,31 @@
+/* Optic theme for GTK 4 / libadwaita apps (GNOME Files): MinUI black, round pills, white accent. */
+@define-color accent_bg_color #ffffff;
+@define-color accent_fg_color #000000;
+@define-color accent_color #ffffff;
+@define-color window_bg_color #000000;
+@define-color window_fg_color #e8e8e8;
+@define-color view_bg_color #000000;
+@define-color view_fg_color #e8e8e8;
+@define-color headerbar_bg_color #000000;
+@define-color headerbar_fg_color #ffffff;
+@define-color headerbar_backdrop_color #000000;
+@define-color sidebar_bg_color #0b0b0b;
+@define-color sidebar_fg_color #e8e8e8;
+@define-color sidebar_backdrop_color #0b0b0b;
+@define-color card_bg_color #141414;
+@define-color popover_bg_color #141414;
+@define-color dialog_bg_color #141414;
+@define-color thumbnail_bg_color #141414;
+:root {
+  --accent-bg-color: #ffffff; --accent-fg-color: #000000; --accent-color: #ffffff;
+  --window-bg-color: #000000; --window-fg-color: #e8e8e8;
+  --view-bg-color: #000000; --view-fg-color: #e8e8e8;
+  --headerbar-bg-color: #000000; --headerbar-fg-color: #ffffff; --headerbar-backdrop-color: #000000;
+  --sidebar-bg-color: #0b0b0b; --sidebar-fg-color: #e8e8e8; --sidebar-backdrop-color: #0b0b0b;
+  --card-bg-color: #141414; --popover-bg-color: #141414; --dialog-bg-color: #141414;
+}
+* { font-family: "BPreplay"; }
+button, entry, searchbar entry, .linked > button, spinbutton, dropdown > button, headerbar button { border-radius: 999px; }
+.navigation-sidebar > row, list.navigation-sidebar row { border-radius: 999px; }
+.navigation-sidebar > row:selected, list row:selected, gridview > child:selected { background-color: #ffffff; color: #000000; border-radius: 999px; }
+headerbar { box-shadow: none; }

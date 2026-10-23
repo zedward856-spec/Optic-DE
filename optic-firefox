@@ -1,0 +1,7 @@
+#!/bin/sh
+# Firefox with Optic's profile: tuned prefs (fast start under proot) and the Optic look.
+P=/root/.mozilla/optic
+mkdir -p "$P/chrome"
+cp /opt/optic-de/share/firefox-user.js "$P/user.js"
+cp /opt/optic-de/share/firefox-userChrome.css "$P/chrome/userChrome.css"
+exec firefox-esr --profile "$P" "$@"

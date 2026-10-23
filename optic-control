@@ -1,0 +1,83 @@
+#!/bin/bash
+# Optic DE's control centre (tap the clock) asks this for the state of Wi-Fi, Bluetooth, sound,
+# brightness and battery, and to change them.
+#   optic-control get                    key=value lines (a value of "none": not available here)
+#   optic-control set-volume 0..100 | toggle-mute | set-brightness 0..100 | toggle-wifi | toggle-bt
+# On Android (Optic Suite) the phone answers: Linux inside proot can't reach any of it, so the
+# Optic app listens on a private local port (OPTIC_CTL=port:token).
+
+if [ -n "$OPTIC_CTL" ]; then
+  exec 3<>"/dev/tcp/127.0.0.1/${OPTIC_CTL%%:*}" || exit 1
+  printf '%s %s\n' "${OPTIC_CTL#*:}" "$*" >&3
+  cat <&3
+  exit 0
+fi
+
+have() { command -v "$1" >/dev/null 2>&1; }
+sink=@DEFAULT_AUDIO_SINK@
+
+volume() {
+  if have wpctl; then
+    v=$(wpctl get-volume $sink 2>/dev/null) || return 1
+    awk '{ printf "volume=%d\n", $2 * 100 + 0.5; print ($3 == "[MUTED]") ? "muted=1" : "muted=0" }' <<<"$v"
+  elif have pactl; then
+    echo "volume=$(pactl get-sink-volume @DEFAULT_SINK@ 2>/dev/null | grep -o '[0-9]*%' | head -1 | tr -d %)"
+    pactl get-sink-mute @DEFAULT_SINK@ 2>/dev/null | grep -q yes && echo muted=1 || echo muted=0
+  elif have amixer; then
+    l=$(amixer get Master 2>/dev/null | grep -o '\[[0-9]*%\] *\[o[nf]*\]' | head -1)
+    [ -n "$l" ] || return 1
+    echo "volume=$(grep -o '[0-9]*' <<<"$l" | head -1)"
+    grep -q off <<<"$l" && echo muted=1 || echo muted=0
+  else return 1; fi
+}
+
+backlight() { for d in /sys/class/backlight/*; do [ -r "$d/max_brightness" ] && { echo "$d"; return; }; done; return 1; }
+
+case "$1" in
+get)
+  # Wi-Fi (NetworkManager)
+  if have nmcli && [ "$(nmcli -t -f WIFI general 2>/dev/null)" != "" ]; then
+    if [ "$(nmcli -t -f WIFI general)" = enabled ]; then
+      echo wifi=on
+      echo "wifi_name=$(nmcli -t -f active,ssid dev wifi 2>/dev/null | grep '^yes:' | head -1 | cut -d: -f2-)"
+    else echo wifi=off; fi
+  else echo wifi=none; fi
+  # Bluetooth (BlueZ)
+  if have bluetoothctl; then
+    s=$(timeout 2 bluetoothctl show 2>/dev/null)
+    if grep -q 'Powered: yes' <<<"$s"; then echo bt=on; elif grep -q 'Powered: no' <<<"$s"; then echo bt=off; else echo bt=none; fi
+  else echo bt=none; fi
+  # Sound
+  volume || { echo volume=none; echo muted=none; }
+  # Brightness
+  if have brightnessctl && [ -n "$(brightnessctl -l -c backlight 2>/dev/null | grep -m1 Device)" ]; then
+    echo "brightness=$(brightnessctl -m -c backlight 2>/dev/null | cut -d, -f4 | tr -d %)"
+  elif b=$(backlight); then
+    echo "brightness=$(( $(cat "$b/brightness") * 100 / $(cat "$b/max_brightness") ))"
+  else echo brightness=none; fi
+  # Battery
+  for p in /sys/class/power_supply/BAT*; do
+    [ -r "$p/capacity" ] || continue
+    echo "battery=$(cat "$p/capacity")"
+    case "$(cat "$p/status" 2>/dev/null)" in Charging|Full) echo charging=1 ;; *) echo charging=0 ;; esac
+    exit 0
+  done
+  echo battery=none
+  ;;
+set-volume)
+  if have wpctl; then wpctl set-volume $sink "$2%"
+  elif have pactl; then pactl set-sink-volume @DEFAULT_SINK@ "$2%"
+  elif have amixer; then amixer -q set Master "$2%"; fi ;;
+toggle-mute)
+  if have wpctl; then wpctl set-mute $sink toggle
+  elif have pactl; then pactl set-sink-mute @DEFAULT_SINK@ toggle
+  elif have amixer; then amixer -q set Master toggle; fi ;;
+set-brightness)
+  n=$2; [ "$n" -lt 1 ] && n=1
+  if have brightnessctl; then brightnessctl -q -c backlight set "$n%"
+  elif b=$(backlight); then echo $(( n * $(cat "$b/max_brightness") / 100 )) > "$b/brightness" 2>/dev/null; fi ;;
+toggle-wifi)
+  have nmcli && { [ "$(nmcli -t -f WIFI general)" = enabled ] && nmcli radio wifi off || nmcli radio wifi on; } ;;
+toggle-bt)
+  have bluetoothctl && { timeout 2 bluetoothctl show | grep -q 'Powered: yes' && timeout 3 bluetoothctl power off || timeout 3 bluetoothctl power on; } >/dev/null ;;
+esac

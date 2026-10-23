@@ -19,6 +19,7 @@ It was built to run on an Android phone (inside Debian, through the
 | `optic-files` | **Optic Files**: a file manager |
 | `optic-settings` | **Optic Settings**: wallpaper, taskbar, clock, screen size, about |
 | `optic-session` | Starts the session (themes, scaling, D-Bus), then `optic-de` |
+| `optic-control` | The control centre's backend: reads and changes Wi-Fi, Bluetooth, sound, brightness, battery |
 | `optic-firefox` | Firefox with Optic's profile: tabs in the title bar, Optic's buttons |
 | `libsysvshm.so` | Only for Android / proot: System V shared memory and a Wine fix (not needed on a PC) |
 
@@ -34,6 +35,12 @@ It was built to run on an Android phone (inside Debian, through the
   - push a window against the left or right side for that half, or near a corner for a quarter;
   - snapped windows sit flush, with no gaps.
 - **App menu:** the Optic button lists every installed app with a `.desktop` file.
+- **Control centre:** tap the clock. A panel opens centred above the taskbar with:
+  - **Wi-Fi** and **Bluetooth** tiles: white when on; tap to switch them;
+  - **sound** and **brightness** sliders: drag them, or use the scroll wheel; tap the speaker to mute;
+  - **battery** level and charging.
+
+  It uses the standard tools when they're installed: NetworkManager (`nmcli`), BlueZ (`bluetoothctl`), PipeWire (`wpctl`), PulseAudio (`pactl`) or ALSA (`amixer`), and `brightnessctl` or `/sys/class/backlight`. Anything missing shows "Not here".
 
 ### Optic Terminal
 ![Terminal tabs](docs/screenshots/terminal-tabs.png)
@@ -82,6 +89,8 @@ A three-finger swipe down brings up Optic's own split keyboard:
 
 - **Top strip:** editing keys, and Ctrl / Alt / Shift / Super as on/off toggles, plus F1–F12.
 - **Bottom corners:** QWERTY under each thumb, an arrow cluster, and Left / wheel / Right mouse keys.
+
+On a phone, the control centre is answered by the Optic app over a private local socket: it sets the media volume and the desktop screen's brightness, and opens Android's own Wi-Fi and Bluetooth panels (Android doesn't let apps switch those).
 
 The phone-only parts of `optic-session` run only when `OPTIC_ANDROID=1`. `libsysvshm.so` exists for the same reason: Android has no System V shared memory, and it refuses Wine's code pages.
 

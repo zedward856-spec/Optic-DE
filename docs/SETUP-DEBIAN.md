@@ -34,6 +34,23 @@ sudo apt install \
 
 `firefox-esr`, `nano` and `xclip` are optional. Optic DE runs without them; those buttons just won't do anything.
 
+### For the control centre (optional)
+
+The control centre (tap the clock) uses these if they're there. A full desktop install of Debian usually has most of them already:
+
+```sh
+sudo apt install network-manager bluez wireplumber brightnessctl
+```
+
+| Package | Control |
+|---|---|
+| `network-manager` | Wi-Fi tile (`nmcli`) |
+| `bluez` | Bluetooth tile (`bluetoothctl`) |
+| `wireplumber` (PipeWire), or `pulseaudio-utils`, or `alsa-utils` | Sound slider and mute |
+| `brightnessctl` | Brightness slider (laptops). Without it, Optic falls back to `/sys/class/backlight`, which usually needs root. |
+
+The battery is read from `/sys/class/power_supply`, so it needs no package. On a desktop PC without a battery, it shows "No battery".
+
 ## 2. Get it and build it
 
 ```sh
@@ -101,6 +118,7 @@ export OPTIC_THEME=always
 - **Snapping:**
   - drag a window to the **top** of the screen and drop it on a layout in the card that appears;
   - drag it to the **left or right edge** for half the screen, or near a corner for a quarter.
+- **Control centre:** tap the **clock**. Tap Wi-Fi or Bluetooth to switch them, drag the sound and brightness sliders, and tap the speaker to mute. Tap outside to close it.
 - **Terminal:** **+** or Ctrl+Shift+T for a new tab.
 - **Files:**
   - double-click to open, right-click for the menu;
@@ -136,6 +154,7 @@ This removes `/opt/optic-de`, the font, the command links and the login-screen e
 | Login screen has no **Optic** entry | Check that `/usr/share/xsessions/optic.desktop` exists (rerun `sudo make install`). Some login screens only list sessions after a restart. |
 | Black screen, then back to the login screen | Look at `~/.xsession-errors` (login screen) or the terminal you ran `startx` from. A missing `dbus-x11` is the usual cause. |
 | Everything is tiny | Set `OPTIC_SCALE=2` (step 4). |
+| A control-centre item says "Not here" | Install its package (see "For the control centre" in step 1). For brightness without `brightnessctl`, your user needs write access to `/sys/class/backlight/*/brightness`. |
 | Terminal opens nothing | Install `xterm`; Optic Terminal's tabs are xterms. |
 | `make` fails with "Package … was not found" | One of the `lib…-dev` packages from step 1 is missing. |
 | Wayland login (GNOME / KDE) shows no Optic | Choose Optic from the login screen's session list; it starts its own X11 session. |

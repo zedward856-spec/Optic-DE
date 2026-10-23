@@ -24,7 +24,7 @@ libsysvshm.so: sysvshm.c
 install: all
 	install -d /opt/optic-de/bin /opt/optic-de/share /opt/optic-de/lib
 	install -m 755 libsysvshm.so /opt/optic-de/lib/
-	install -m 755 optic-de optic-settings optic-term optic-files optic-session optic-firefox /opt/optic-de/bin/
+	install -m 755 optic-de optic-settings optic-term optic-files optic-session optic-firefox optic-control /opt/optic-de/bin/
 	install -m 644 wallpaper.png logo.a8 bpreplay_bold.otf xterm.res gtk3.css gtk4.css gtk-settings.ini firefox-user.js firefox-userChrome.css /opt/optic-de/share/
 	install -d /usr/local/share/fonts/optic
 	install -m 644 bpreplay_bold.otf /usr/local/share/fonts/optic/
@@ -34,12 +34,13 @@ install: all
 	ln -sf /opt/optic-de/bin/optic-files /usr/local/bin/optic-files
 	ln -sf /opt/optic-de/bin/optic-session /usr/local/bin/optic-session
 	ln -sf /opt/optic-de/bin/optic-firefox /usr/local/bin/optic-firefox
+	ln -sf /opt/optic-de/bin/optic-control /usr/local/bin/optic-control
 	install -d /usr/share/xsessions
 	install -m 644 optic.desktop /usr/share/xsessions/optic.desktop
 
 uninstall:
 	rm -rf /opt/optic-de /usr/local/share/fonts/optic /usr/share/xsessions/optic.desktop
-	cd /usr/local/bin && rm -f optic-settings optic-term optic-files optic-session optic-firefox
+	cd /usr/local/bin && rm -f optic-settings optic-term optic-files optic-session optic-firefox optic-control
 
 clean:
 	rm -f optic-de optic-settings optic-term optic-files libsysvshm.so

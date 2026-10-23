@@ -106,6 +106,7 @@ static int panelW, shown, autohide = 1, seconds = 1;
 static float fade;               /* 0 invisible .. 1 fully shown */
 static int fadeDir;              /* +1 fading in, -1 fading out */
 static double lastUse;           /* the last time the taskbar was touched */
+static Window cc;                /* the control centre, while it's open (tap the clock) */
 static int pressed = -1;
 static Canvas *backdrop, *panelFull;
 static Window menu;
@@ -1007,7 +1008,7 @@ static void showPanel(void) {
 }
 
 static void hidePanel(void) {
-    if (!autohide || menu || pressed >= 0 || !shown) return;
+    if (!autohide || menu || cc || pressed >= 0 || !shown) return;
     fadeDir = -1;
 }
 
@@ -1035,8 +1036,12 @@ static int itemAt(int x) {
 static void openMenu(void);
 static void closeMenu(void);
 
+static void openCc(void);
+static void closeCc(void);
+
 static void activate(int k, int button) {
     Item *it = &items[k];
+    if (it->kind == 3) { if (menu) closeMenu(); if (cc) closeCc(); else openCc(); return; }
     if (it->kind == 0) { if (menu) closeMenu(); else openMenu(); return; }
     int ci = -1;
     if (it->kind == 1) pinRunning(it->pin, &ci);
@@ -1053,6 +1058,324 @@ static void activate(int k, int button) {
     cl[ci].quietUntil = 0; /* tapped: show it, preloaded or not */
     if (cl[ci].w == focused && !cl[ci].iconic) iconify(ci);
     else restore(ci);
+}
+
+/* ---- control centre: tap the clock ----------------------------------------------------------
+ * Wi-Fi and Bluetooth tiles (white when on; a tap toggles them, or on a phone opens its quick
+ * panel), sound and brightness sliders (drag along them; the speaker mutes), and the battery.
+ * The state comes from optic-control, read in the background so the desktop never waits on it. */
+
+static int ccW, ccH;
+static Canvas *ccBack;
+static int ccWifi = -1, ccBt = -1, ccVol = -1, ccMuted, ccBright = -1, ccBatt = -1, ccCharging, ccKnown;
+static char ccWifiName[64];
+static int ccPressed = -1, ccDrag = -1;     /* 0 Wi-Fi, 1 Bluetooth, 2 speaker, 3 volume, 4 brightness */
+static double ccNextRead, ccLastSend;
+static int ccPipe = -1, ccLen;
+static char ccBuf[2048];
+
+#define CC_PAD (16 * S)
+#define CC_TILE (60 * S)
+#define CC_ROW (44 * S)
+
+static int ccTileW(void) { return (ccW - CC_PAD * 3) / 2; }
+static int ccRowY(int r) { return CC_PAD + CC_TILE + 16 * S + r * (CC_ROW + 12 * S); }
+static int ccSliderX(void) { return CC_PAD + CC_ROW + 12 * S; }
+static int ccSliderW(void) { return ccW - CC_PAD - ccSliderX(); }
+static int ccBattY(void) { return ccRowY(2) + 4 * S; }
+/* centred over the taskbar, which is centred on the screen */
+static int ccX(void) { return panelX() + (panelW - ccW) / 2; }
+static int ccY(void) { return SH - PH - MARGIN * 2 - ccH; }
+
+/* Asks optic-control for the state; the answer is read in the main loop as it arrives. */
+static void ccRead(void) {
+    if (ccPipe >= 0) return;
+    int p[2];
+    if (pipe(p)) return;
+    pid_t k = fork();
+    if (k == 0) {
+        close(p[0]); dup2(p[1], 1); close(p[1]);
+        if (dpy) close(ConnectionNumber(dpy));
+        signal(SIGCHLD, SIG_DFL);
+        execl("/bin/sh", "sh", "-c", "exec optic-control get 2>/dev/null", (char *)NULL);
+        _exit(127);
+    }
+    close(p[1]);
+    if (k < 0) { close(p[0]); return; }
+    ccPipe = p[0];
+    ccLen = 0;
+}
+
+static int ccNum(const char *v) { return strcmp(v, "none") ? atoi(v) : -1; }
+
+static void ccParse(void) {
+    ccBuf[ccLen] = 0;
+    for (char *line = strtok(ccBuf, "\n"); line; line = strtok(NULL, "\n")) {
+        char *eq = strchr(line, '=');
+        if (!eq) continue;
+        *eq = 0;
+        const char *k = line, *v = eq + 1;
+        if (!strcmp(k, "wifi")) ccWifi = !strcmp(v, "on") ? 1 : !strcmp(v, "off") ? 0 : -1;
+        else if (!strcmp(k, "wifi_name")) snprintf(ccWifiName, sizeof ccWifiName, "%s", v);
+        else if (!strcmp(k, "bt")) ccBt = !strcmp(v, "on") ? 1 : !strcmp(v, "off") ? 0 : -1;
+        /* a slider being dragged keeps the finger's value */
+        else if (!strcmp(k, "volume")) { if (ccDrag != 3) ccVol = ccNum(v); }
+        else if (!strcmp(k, "muted")) ccMuted = !strcmp(v, "1");
+        else if (!strcmp(k, "brightness")) { if (ccDrag != 4) ccBright = ccNum(v); }
+        else if (!strcmp(k, "battery")) ccBatt = ccNum(v);
+        else if (!strcmp(k, "charging")) ccCharging = !strcmp(v, "1");
+    }
+    ccKnown = 1;
+}
+
+static void drawCc(void);
+
+static void ccPoll(void) {
+    int n = (int)read(ccPipe, ccBuf + ccLen, sizeof ccBuf - 1 - (size_t)ccLen);
+    if (n > 0) { ccLen += n; if (ccLen < (int)sizeof ccBuf - 1) return; }
+    close(ccPipe);
+    ccPipe = -1;
+    ccWifiName[0] = 0;
+    ccParse();
+    drawCc();
+}
+
+static void ccSend(const char *what, int val) {
+    char cmd[96];
+    if (val >= 0) snprintf(cmd, sizeof cmd, "exec optic-control %s %d >/dev/null 2>&1", what, val);
+    else snprintf(cmd, sizeof cmd, "exec optic-control %s >/dev/null 2>&1", what);
+    spawn(cmd);
+    ccLastSend = now();
+    ccNextRead = now() + 1.2;   /* then read back what it really did */
+}
+
+/* An arc of line segments, angles in degrees (0 = right, 90 = down). */
+static void ccArc(Canvas *c, float cx, float cy, float r, float a0, float a1, float t, uint32_t ink) {
+    float px = 0, py = 0;
+    for (int i = 0; i <= 12; i++) {
+        float a = (a0 + (a1 - a0) * i / 12.f) * (float)M_PI / 180.f;
+        float x = cx + r * cosf(a), y = cy + r * sinf(a);
+        if (i) cv_line(c, px, py, x, y, t, ink, 1);
+        px = x; py = y;
+    }
+}
+
+static void ccIcon(Canvas *c, int which, float x, float y, float a, uint32_t ink) {
+    float t = 2.2f * S;
+    switch (which) {
+    case 0: /* Wi-Fi: three arcs over a dot */
+        cv_circle(c, x, y + a * .55f, 2.2f * S, ink, 1);
+        for (int k = 1; k <= 3; k++) ccArc(c, x, y + a * .55f, a * .38f * k, 225, 315, t, ink);
+        break;
+    case 1: /* Bluetooth's rune */
+        cv_line(c, x - a * .5f, y - a * .45f, x + a * .5f, y + a * .45f, t, ink, 1);
+        cv_line(c, x + a * .5f, y + a * .45f, x, y + a * .9f, t, ink, 1);
+        cv_line(c, x, y + a * .9f, x, y - a * .9f, t, ink, 1);
+        cv_line(c, x, y - a * .9f, x + a * .5f, y - a * .45f, t, ink, 1);
+        cv_line(c, x + a * .5f, y - a * .45f, x - a * .5f, y + a * .45f, t, ink, 1);
+        break;
+    case 2: /* speaker, waves or a cross when muted */
+        cv_line(c, x - a * .75f, y - a * .3f, x - a * .4f, y - a * .3f, t, ink, 1);
+        cv_line(c, x - a * .4f, y - a * .3f, x, y - a * .7f, t, ink, 1);
+        cv_line(c, x, y - a * .7f, x, y + a * .7f, t, ink, 1);
+        cv_line(c, x, y + a * .7f, x - a * .4f, y + a * .3f, t, ink, 1);
+        cv_line(c, x - a * .4f, y + a * .3f, x - a * .75f, y + a * .3f, t, ink, 1);
+        cv_line(c, x - a * .75f, y + a * .3f, x - a * .75f, y - a * .3f, t, ink, 1);
+        if (ccMuted) {
+            cv_line(c, x + a * .3f, y - a * .3f, x + a * .8f, y + a * .3f, t, ink, 1);
+            cv_line(c, x + a * .8f, y - a * .3f, x + a * .3f, y + a * .3f, t, ink, 1);
+        } else {
+            ccArc(c, x, y, a * .45f, -45, 45, t, ink);
+            ccArc(c, x, y, a * .8f, -45, 45, t, ink);
+        }
+        break;
+    case 3: /* sun */
+        cv_ring(c, x, y, a * .35f, t, ink, 1);
+        for (int k = 0; k < 8; k++) {
+            float g = k * (float)M_PI / 4;
+            cv_line(c, x + cosf(g) * a * .58f, y + sinf(g) * a * .58f, x + cosf(g) * a * .82f, y + sinf(g) * a * .82f, t, ink, 1);
+        }
+        break;
+    }
+}
+
+static void drawCc(void) {
+    if (!cc) return;
+    Canvas *c = cv_new(ccW, ccH);
+    cv_blit(c, ccBack, 0, 0);
+    cv_rrect(c, 0, 0, ccW, ccH, 22 * S, C_BLACK, 0.95f);
+    /* Wi-Fi and Bluetooth tiles */
+    for (int t = 0; t < 2; t++) {
+        int st = t ? ccBt : ccWifi;
+        int lit = st == 1 || ccPressed == t;
+        float x = CC_PAD + t * (ccTileW() + CC_PAD);
+        cv_pill(c, x, CC_PAD, ccTileW(), CC_TILE, lit ? C_WHITE : C_DARK, 1);
+        ccIcon(c, t, x + CC_TILE / 2.f, CC_PAD + CC_TILE / 2.f, 13 * S, lit ? C_BLACK : (st < 0 ? C_DIM : C_WHITE));
+    }
+    /* sound and brightness */
+    for (int r = 0; r < 2; r++) {
+        int y = ccRowY(r), v = r ? ccBright : ccVol;
+        int iconLit = r == 0 && ccPressed == 2;
+        cv_circle(c, CC_PAD + CC_ROW / 2.f, y + CC_ROW / 2.f, CC_ROW / 2.f, iconLit ? C_WHITE : C_DARK, 1);
+        ccIcon(c, r ? 3 : 2, CC_PAD + CC_ROW / 2.f + (r ? 0 : 2 * S), y + CC_ROW / 2.f, 11 * S, iconLit ? C_BLACK : (v < 0 ? C_DIM : C_WHITE));
+        cv_pill(c, ccSliderX(), y, ccSliderW(), CC_ROW, C_DARK, 1);
+        if (v >= 0) {
+            float fw = CC_ROW + (ccSliderW() - CC_ROW) * v / 100.f;
+            cv_pill(c, ccSliderX(), y, fw, CC_ROW, r == 0 && ccMuted ? C_GRAY : C_WHITE, 1);
+        }
+    }
+    /* battery */
+    {
+        float bx = CC_PAD + 8 * S, by = ccBattY() + 6 * S, bw = 30 * S, bh = 16 * S;
+        uint32_t ink = ccBatt < 0 ? C_DIM : C_WHITE;
+        cv_rrect_outline(c, bx, by, bw, bh, 4 * S, 1.8f * S, ink, 1);
+        cv_rrect(c, bx + bw + 1 * S, by + bh * .3f, 3 * S, bh * .4f, 1.5f * S, ink, 1);
+        if (ccBatt > 0) cv_rrect(c, bx + 3 * S, by + 3 * S, (bw - 6 * S) * ccBatt / 100.f, bh - 6 * S, 2 * S, ink, 1);
+    }
+    Pixmap pm = XCreatePixmap(dpy, cc, (unsigned)ccW, (unsigned)ccH, (unsigned)ui.depth);
+    cv_put(&ui, c, pm, gc, 0, 0);
+    XftDraw *xd = XftDrawCreate(dpy, pm, ui.vis, ui.cmap);
+    char v[96];
+    for (int t = 0; t < 2; t++) {
+        int st = t ? ccBt : ccWifi;
+        int lit = st == 1 || ccPressed == t;
+        int x = CC_PAD + t * (ccTileW() + CC_PAD) + CC_TILE - 4 * S;
+        uint32_t ink = lit ? C_BLACK : C_WHITE;
+        ui_text(&ui, xd, ui.font, x, CC_PAD + CC_TILE / 2 - 2 * S, ink, t ? "Bluetooth" : "Wi-Fi");
+        if (!ccKnown) snprintf(v, sizeof v, "…");
+        else if (st < 0) snprintf(v, sizeof v, "Not here");
+        else if (!st) snprintf(v, sizeof v, "Off");
+        else if (!t && ccWifiName[0]) snprintf(v, sizeof v, "%.40s", ccWifiName);
+        else snprintf(v, sizeof v, "On");
+        XRectangle clip = { (short)x, 0, (unsigned short)(ccTileW() - CC_TILE + 4 * S - 14 * S), (unsigned short)ccH };
+        XftDrawSetClipRectangles(xd, 0, 0, &clip, 1);
+        ui_text(&ui, xd, ui.small, x, CC_PAD + CC_TILE / 2 + 18 * S, lit ? 0x444444 : C_GRAY, v);
+        XftDrawSetClip(xd, None);
+    }
+    for (int r = 0; r < 2; r++) {
+        int y = ccRowY(r), val = r ? ccBright : ccVol;
+        if (val < 0) snprintf(v, sizeof v, ccKnown ? "Not here" : "…"); else snprintf(v, sizeof v, "%d%%", val);
+        int w = ui_text_w(&ui, ui.small, v);
+        /* the number sits at the track's right end, black over the white fill, white over dark */
+        float fillEnd = val >= 0 ? ccSliderX() + CC_ROW + (ccSliderW() - CC_ROW) * val / 100.f : 0;
+        int tx = ccSliderX() + ccSliderW() - 16 * S - w;
+        ui_text(&ui, xd, ui.small, tx, ui_baseline(ui.small, y, CC_ROW), fillEnd > tx + w ? C_BLACK : C_WHITE, v);
+    }
+    if (ccBatt >= 0) snprintf(v, sizeof v, "%d%%%s", ccBatt, ccCharging ? "  ·  Charging" : "");
+    else snprintf(v, sizeof v, ccKnown ? "No battery" : "…");
+    ui_text(&ui, xd, ui.font, CC_PAD + 52 * S, ui_baseline(ui.font, ccBattY(), 28 * S), ccBatt < 0 ? C_GRAY : C_WHITE, v);
+    XftDrawDestroy(xd);
+    XCopyArea(dpy, pm, cc, gc, 0, 0, (unsigned)ccW, (unsigned)ccH, 0, 0);
+    XFreePixmap(dpy, pm);
+    cv_free(c);
+}
+
+static void openCc(void) {
+    ccW = 380 * S;
+    ccH = ccBattY() + 28 * S + CC_PAD;
+    ccPressed = ccDrag = -1;
+    cv_free(ccBack);
+    ccBack = cv_new(ccW, ccH);
+    XImage *im = XGetImage(dpy, root, ccX(), ccY(), (unsigned)ccW, (unsigned)ccH, AllPlanes, ZPixmap);
+    if (im) {
+        for (int j = 0; j < ccH; j++) for (int i = 0; i < ccW; i++) ccBack->px[j * ccW + i] = (uint32_t)XGetPixel(im, i, j) & 0xFFFFFF;
+        XDestroyImage(im);
+    }
+    XSetWindowAttributes sa = { .override_redirect = True, .save_under = True,
+        .event_mask = ExposureMask | ButtonPressMask | ButtonReleaseMask | PointerMotionMask };
+    cc = XCreateWindow(dpy, root, ccX(), ccY(), (unsigned)ccW, (unsigned)ccH, 0, ui.depth, InputOutput, ui.vis,
+                       CWOverrideRedirect | CWEventMask | CWSaveUnder, &sa);
+    Pixmap mask = XCreatePixmap(dpy, cc, (unsigned)ccW, (unsigned)ccH, 1);
+    GC mg = XCreateGC(dpy, mask, 0, NULL);
+    XSetForeground(dpy, mg, 0); XFillRectangle(dpy, mask, mg, 0, 0, (unsigned)ccW, (unsigned)ccH);
+    XSetForeground(dpy, mg, 1);
+    float r = 22.f * S;
+    for (int yy = 0; yy < ccH; yy++) {
+        float dy = yy + .5f < r ? r - (yy + .5f) : (yy + .5f > ccH - r ? yy + .5f - (ccH - r) : 0);
+        float dx = r - sqrtf(fmaxf(0, (r + .5f) * (r + .5f) - dy * dy));
+        int x0 = dy > 0 ? (int)floorf(dx) : 0;
+        XFillRectangle(dpy, mask, mg, x0, yy, (unsigned)(ccW - 2 * x0), 1);
+    }
+    XShapeCombineMask(dpy, cc, ShapeBounding, 0, 0, mask, ShapeSet);
+    XFreeGC(dpy, mg); XFreePixmap(dpy, mask);
+    XMapRaised(dpy, cc);
+    XGrabPointer(dpy, cc, True, ButtonPressMask | ButtonReleaseMask | PointerMotionMask, GrabModeAsync, GrabModeAsync, None, None, CurrentTime);
+    ccRead();
+    ccNextRead = now() + 2;
+    drawCc();
+    drawPanel();
+}
+
+static void closeCc(void) {
+    if (!cc) return;
+    XUngrabPointer(dpy, CurrentTime);
+    XDestroyWindow(dpy, cc);
+    cc = 0;
+    ccPressed = ccDrag = -1;
+    lastUse = now();
+    drawPanel();
+}
+
+static int ccHit(int x, int y) {
+    if (y >= CC_PAD && y < CC_PAD + CC_TILE) {
+        if (x >= CC_PAD && x < CC_PAD + ccTileW()) return 0;
+        if (x >= CC_PAD * 2 + ccTileW() && x < ccW - CC_PAD) return 1;
+    }
+    for (int r = 0; r < 2; r++) {
+        int y0 = ccRowY(r);
+        if (y < y0 - 4 * S || y >= y0 + CC_ROW + 4 * S) continue;
+        if (x < ccSliderX() - 6 * S) return r ? -1 : 2;
+        return 3 + r;
+    }
+    return -1;
+}
+
+static void ccSlide(int which, int x, int final) {
+    int v = (int)((x - ccSliderX() - CC_ROW / 2.f) * 100 / (float)(ccSliderW() - CC_ROW) + .5f);
+    if (v < 0) v = 0;
+    if (v > 100) v = 100;
+    if (which == 3) ccVol = v; else ccBright = v;
+    /* while dragging, a few updates a second; the last one on letting go */
+    if (final || now() - ccLastSend > .12) ccSend(which == 3 ? "set-volume" : "set-brightness", v);
+    drawCc();
+}
+
+static void ccEvent(XEvent *e) {
+    int x = 0, y = 0;
+    if (e->type == ButtonPress || e->type == ButtonRelease) { x = e->xbutton.x_root - ccX(); y = e->xbutton.y_root - ccY(); }
+    else if (e->type == MotionNotify) { x = e->xmotion.x_root - ccX(); y = e->xmotion.y_root - ccY(); }
+    lastUse = now();
+    if (e->type == ButtonPress) {
+        if (x < 0 || y < 0 || x >= ccW || y >= ccH) { closeCc(); return; }
+        int h = ccHit(x, y);
+        if ((e->xbutton.button == 4 || e->xbutton.button == 5) && (h == 3 || h == 4)) {
+            /* the wheel nudges a slider */
+            int *v = h == 3 ? &ccVol : &ccBright;
+            if (*v < 0) return;
+            *v += e->xbutton.button == 4 ? 5 : -5;
+            if (*v < 0) *v = 0;
+            if (*v > 100) *v = 100;
+            ccSend(h == 3 ? "set-volume" : "set-brightness", *v);
+            drawCc();
+            return;
+        }
+        if (e->xbutton.button != 1) return;
+        ccPressed = h;
+        if ((h == 3 && ccVol >= 0) || (h == 4 && ccBright >= 0)) { ccDrag = h; ccSlide(h, x, 0); return; }
+        drawCc();
+    } else if (e->type == MotionNotify) {
+        if (ccDrag >= 0) { while (XCheckTypedEvent(dpy, MotionNotify, e)) {} x = e->xmotion.x_root - ccX(); ccSlide(ccDrag, x, 0); }
+    } else if (e->type == ButtonRelease && e->xbutton.button == 1) {
+        if (ccDrag >= 0) { int d = ccDrag; ccDrag = ccPressed = -1; ccSlide(d, x, 1); return; }
+        int h = ccHit(x, y), was = ccPressed;
+        ccPressed = -1;
+        if (h >= 0 && h == was) {
+            if (h == 0 && ccWifi >= 0) ccSend("toggle-wifi", -1);
+            else if (h == 1) ccSend("toggle-bt", -1);
+            else if (h == 2 && ccVol >= 0) { ccMuted = !ccMuted; ccSend("toggle-mute", -1); }
+        }
+        drawCc();
+    }
 }
 
 /* ---- super menu ---------------------------------------------------------------------------- */
@@ -1309,6 +1632,7 @@ int main(void) {
             XEvent e;
             XNextEvent(dpy, &e);
             if (menu && (e.type == ButtonPress || e.type == ButtonRelease || e.type == MotionNotify)) { menuEvent(&e); continue; }
+            if (cc && (e.type == ButtonPress || e.type == ButtonRelease || e.type == MotionNotify)) { ccEvent(&e); continue; }
             switch (e.type) {
             case MapRequest: manage(e.xmaprequest.window, 0); break;
             case ConfigureRequest: {
@@ -1390,7 +1714,6 @@ int main(void) {
                 if (e.xbutton.window == edgeWin) { showPanel(); break; }
                 if (e.xbutton.window == panel) {
                     pressed = itemAt(e.xbutton.x);
-                    if (pressed >= 0 && items[pressed].kind == 3) pressed = -1;
                     lastUse = now();
                     drawPanel();
                     break;
@@ -1433,6 +1756,7 @@ int main(void) {
                 if (e.xexpose.count) break;
                 if (e.xexpose.window == panel) drawPanel();
                 else if (e.xexpose.window == menu) drawMenu();
+                else if (e.xexpose.window == cc) drawCc();
                 else { int i = findc(e.xexpose.window); if (i >= 0 && cl[i].frame == e.xexpose.window) drawFrame(&cl[i]); }
                 break;
             }
@@ -1440,7 +1764,9 @@ int main(void) {
         /* The clock ticks; the taskbar fades out after a while without use. */
         time_t t = time(NULL);
         if (t != lastSec) { lastSec = t; if (shown && !fadeDir) drawPanel(); }
-        if (shown && autohide && !fadeDir && !menu && pressed < 0 && now() - lastUse > 2.5) hidePanel();
+        if (shown && autohide && !fadeDir && !menu && !cc && pressed < 0 && now() - lastUse > 2.5) hidePanel();
+        /* the control centre keeps itself current while it's open */
+        if (cc && ccDrag < 0 && now() >= ccNextRead) { ccNextRead = now() + 2; ccRead(); }
         if (preloadAt && now() >= preloadAt) {
             preloadAt = 0;
             int running = 0;
@@ -1452,7 +1778,9 @@ int main(void) {
         fd_set fds;
         FD_ZERO(&fds);
         FD_SET(fd, &fds);
+        if (ccPipe >= 0) FD_SET(ccPipe, &fds);
         struct timeval tv = { 0, fadeDir ? 16000 : 200000 };
-        select(fd + 1, &fds, NULL, NULL, &tv);
+        select((ccPipe > fd ? ccPipe : fd) + 1, &fds, NULL, NULL, &tv);
+        if (ccPipe >= 0 && FD_ISSET(ccPipe, &fds)) ccPoll();
     }
 }

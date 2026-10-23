@@ -40,6 +40,8 @@ It was built to run on an Android phone (inside Debian, through the
   - **sound** and **brightness** sliders: drag them, or use the scroll wheel; tap the speaker to mute;
   - **battery** level and charging.
 
+  ![The control centre](docs/screenshots/control-centre.png)
+
   It uses the standard tools when they're installed: NetworkManager (`nmcli`), BlueZ (`bluetoothctl`), PipeWire (`wpctl`), PulseAudio (`pactl`) or ALSA (`amixer`), and `brightnessctl` or `/sys/class/backlight`. Anything missing shows "Not here".
 
 ### Optic Terminal
